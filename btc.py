@@ -112,9 +112,8 @@ def on_message(client, userdata, message):
             try:
                 cur = con.cursor()
 
-                cur.execute('SELECT datetime(ts, "localtime"), btc_price, strftime("%s", ts) FROM price ORDER BY ts DESC LIMIT 2')
+                cur.execute('SELECT datetime(ts, "localtime"), btc_price, strftime("%s", ts) FROM price ORDER BY ts DESC LIMIT 1')
                 ts, latest_btc_price, latest_epoch = cur.fetchone()
-                pre_ts, pre_latest_btc_price, pre_latest_epoch = cur.fetchone()
 
                 cur.execute('SELECT MIN(btc_price), MAX(btc_price), AVG(btc_price) FROM price WHERE ts >= DateTime("now", "-24 hour")')
                 lowest_btc_price, highest_btc_price, avg_btc_price = cur.fetchone()
@@ -131,9 +130,6 @@ def on_message(client, userdata, message):
                 yesterday_median = calc_median(rows)
 
                 cur.close()
-
-                time_delta = int(latest_epoch) - int(pre_latest_epoch)
-                comment    = f'in {time_delta} seconds'
 
                 client.publish(response_topic, f'timestamp: {ts}, latest BTC price: {latest_btc_price:.2f} USD, lowest: {lowest_btc_price:.2f} {compare_prices(lowest_btc_price, yesterday_lowest_btc_price, "")} USD, highest: {highest_btc_price:.2f} USD {compare_prices(highest_btc_price, yesterday_highest_btc_price, "")}, average: {avg_btc_price:.2f} USD {compare_prices(avg_btc_price, yesterday_avg_btc_price, "")}, median: {median:.2f} USD {compare_prices(median, yesterday_median, "")}')
 

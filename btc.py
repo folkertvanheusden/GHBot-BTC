@@ -76,6 +76,19 @@ def predict_linear(v1, t1, v2, t2, t3):
 
     return new_t, new_v
 
+def median(values):
+    if len(values) == 1:
+        return values[0]
+
+    values.sort()
+
+    center = len(values) // 2
+
+    if len(values) & 1:  # odd
+        return values[center]
+
+    return (values[center] + values[center + 1]) / 2
+
 def prophet(client, response_topic):
     con = sqlite3.connect(db_file)
 
@@ -83,33 +96,76 @@ def prophet(client, response_topic):
         client.publish(response_topic, 'Predicting takes a while, please wait.')
 
         cur = con.cursor()
-        cur.execute('SELECT strftime("%s", ts) as ts, btc_price FROM (select ts, avg(btc_price) as btc_price from price group by round(strftime("%s", ts) / 300) order by ts desc LIMIT 1000) AS in_ ORDER BY ts')
+        # cur.execute('SELECT strftime("%s", ts) as ts, btc_price FROM (select ts, avg(btc_price) as btc_price from price group by round(strftime("%s", ts) / 300) order by ts desc LIMIT 1000) AS in_ ORDER BY ts')
+        cur.execute('SELECT strftime("%s", ts) as ts, btc_price FROM (select ts, btc_price from price order by ts desc LIMIT 20000) AS in_ ORDER BY ts')
         rows = cur.fetchall()
         cur.close()
 
         ts = []
-        v  = []
+        va = []
+        vm = []
+
+        groupby = None
+        avg_tot = None
+        med_tot = None
+        n_tot   = 0
 
         for row in rows:
-            ts.append(row[0])
-            v .append(row[1])
+            groupby_cur = int(int(row[0]) / 300)
+
+            if groupby_cur != groupby:
+                if n_tot > 0:
+                    ts.append(groupby * 300)  # first ts
+                    va.append(avg_tot / n_tot)
+                    vm.append(median(med_tot))
+
+                groupby = groupby_cur
+
+                n_tot   = avg_tot = 0
+                med_tot = []
+
+            v = float(row[1])
+
+            avg_tot += v
+            med_tot.append(v)
+
+            n_tot += 1
+
+        if n_tot > 0:
+            ts.append(groupby * 300)  # first ts
+            va.append(avg_tot / n_tot)
+            vm.append(median(med_tot))
 
         ds = pd.to_datetime(ts, unit='s')
 
-        df = pd.DataFrame({'ds': ds, 'y': v}, columns=['ds', 'y'])
+        # average
+        df_a = pd.DataFrame({'ds': ds, 'y': va}, columns=['ds', 'y'])
 
         m = Prophet()
-        m.fit(df)
+        m.fit(df_a)
 
         future = m.make_future_dataframe(periods=1)
         future.tail()
 
         forecast = m.predict(future)
 
-        prediction_ts  = list(forecast.tail(1)['ds'])[0]
-        prediction_val = list(forecast.tail(1)['trend'])[0]
+        prediction_ts = list(forecast.tail(1)['ds'])[0]
+        prediction_va = list(forecast.tail(1)['trend'])[0]
 
-        client.publish(response_topic, f'BTC price prediction (probably not correct): {prediction_val:.2f} dollar on {prediction_ts} (based on 5min average)')
+        # median
+        df_m = pd.DataFrame({'ds': ds, 'y': vm}, columns=['ds', 'y'])
+
+        m = Prophet()
+        m.fit(df_m)
+
+        future = m.make_future_dataframe(periods=1)
+        future.tail()
+
+        forecast = m.predict(future)
+
+        prediction_ma = list(forecast.tail(1)['trend'])[0]
+
+        client.publish(response_topic, f'BTC price prediction for {prediction_ts}: (probably not correct): {prediction_va:.2f} dollar (based on 5min average) or {prediction_ma:.2f} dollar (based on 5min median)')
 
     except Exception as e:
         client.publish(response_topic, f'Exception while predicting BTC price (facebook prophet): {e}, line number: {e.__traceback__.tb_lineno}')

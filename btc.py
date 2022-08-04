@@ -109,7 +109,7 @@ def prophet(client, response_topic):
         prediction_ts  = list(forecast.tail(1)['ds'])[0]
         prediction_val = list(forecast.tail(1)['trend'])[0]
 
-        client.publish(response_topic, f'BTC price prediction (probably not correct): {prediction_val:.2f} dollar on {prediction_ts}')
+        client.publish(response_topic, f'BTC price prediction (probably not correct): {prediction_val:.2f} dollar on {prediction_ts} (based on 5min average)')
 
     except Exception as e:
         client.publish(response_topic, f'Exception while predicting BTC price (facebook prophet): {e}, line number: {e.__traceback__.tb_lineno}')

@@ -87,7 +87,7 @@ def median(values):
     if len(values) & 1:  # odd
         return values[center]
 
-    return (values[center] + values[center + 1]) / 2
+    return ((values[center][0] + values[center + 1][0]) / 2, (values[center][1] + values[center + 1][1]) / 2)
 
 def prophet(client, response_topic):
     con = sqlite3.connect(db_file)
@@ -101,45 +101,60 @@ def prophet(client, response_topic):
         rows = cur.fetchall()
         cur.close()
 
-        ts = []
-        va = []
-        vm = []
+        tsa = []
+        tsm = []
+        va  = []
+        vm  = []
 
         groupby = None
-        avg_tot = None
+        avg_tot_t = None
+        avg_tot_v = None
         med_tot = None
         n_tot   = 0
 
         for row in rows:
-            groupby_cur = int(int(row[0]) / 300)
+            ts = int(row[0])
+            v  = float(row[1])
+
+            groupby_cur = int(ts / 300)
 
             if groupby_cur != groupby:
                 if n_tot > 0:
-                    ts.append(groupby * 300)  # first ts
-                    va.append(avg_tot / n_tot)
-                    vm.append(median(med_tot))
+                    tsa.append(avg_tot_t / n_tot)
+                    va .append(avg_tot_v / n_tot)
+
+                    med = median(med_tot)
+
+                    tsm.append(med[0])
+                    vm .append(med[1])
 
                 groupby = groupby_cur
 
-                n_tot   = avg_tot = 0
-                med_tot = []
+                n_tot     = 0
+                avg_tot_v = 0
+                avg_tot_t = 0
 
-            v = float(row[1])
+                med_tot   = []
 
-            avg_tot += v
-            med_tot.append(v)
+            avg_tot_v += v
+            avg_tot_t += ts
+            n_tot     += 1
 
-            n_tot += 1
+            med_tot.append((ts, v))
 
         if n_tot > 0:
-            ts.append(groupby * 300)  # first ts
-            va.append(avg_tot / n_tot)
-            vm.append(median(med_tot))
+            tsa.append(avg_tot_t / n_tot)
+            va .append(avg_tot_v / n_tot)
 
-        ds = pd.to_datetime(ts, unit='s')
+            med = median(med_tot)
+
+            tsm.append(med[0])
+            vm .append(med[1])
 
         # average
-        df_a = pd.DataFrame({'ds': ds, 'y': va}, columns=['ds', 'y'])
+        ds_a = pd.to_datetime(tsa, unit='s')
+
+        df_a = pd.DataFrame({'ds': ds_a, 'y': va}, columns=['ds', 'y'])
 
         m = Prophet()
         m.fit(df_a)
@@ -149,11 +164,13 @@ def prophet(client, response_topic):
 
         forecast = m.predict(future)
 
-        prediction_ts = list(forecast.tail(1)['ds'])[0]
-        prediction_va = list(forecast.tail(1)['trend'])[0]
+        prediction_ts_a = list(forecast.tail(1)['ds'])[0]
+        prediction_va   = list(forecast.tail(1)['trend'])[0]
 
         # median
-        df_m = pd.DataFrame({'ds': ds, 'y': vm}, columns=['ds', 'y'])
+        ds_m = pd.to_datetime(tsm, unit='s')
+
+        df_m = pd.DataFrame({'ds': ds_m, 'y': vm}, columns=['ds', 'y'])
 
         m = Prophet()
         m.fit(df_m)
@@ -163,9 +180,10 @@ def prophet(client, response_topic):
 
         forecast = m.predict(future)
 
-        prediction_ma = list(forecast.tail(1)['trend'])[0]
+        prediction_ts_m = list(forecast.tail(1)['ds'])[0]
+        prediction_ma   = list(forecast.tail(1)['trend'])[0]
 
-        client.publish(response_topic, f'BTC price prediction for {prediction_ts}: (probably not correct): {prediction_va:.2f} dollar (based on 5min average) or {prediction_ma:.2f} dollar (based on 5min median)')
+        client.publish(response_topic, f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m})')
 
     except Exception as e:
         client.publish(response_topic, f'Exception while predicting BTC price (facebook prophet): {e}, line number: {e.__traceback__.tb_lineno}')
@@ -210,7 +228,7 @@ def on_message(client, userdata, message):
 
     #print(channel)
 
-    if channel in channels:
+    if channel in channels or (len(channel) >= 1 and channel[0] == '\\'):
         response_topic = f'{topic_prefix}to/irc/{channel}/notice'
 
         tokens  = text.split(' ')
@@ -283,12 +301,11 @@ def on_message(client, userdata, message):
             t.start()
 
 def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        client.subscribe(f'{topic_prefix}from/irc/#')
+    client.subscribe(f'{topic_prefix}from/irc/#')
 
-        client.subscribe(f'{topic_prefix}from/bot/command')
+    client.subscribe(f'{topic_prefix}from/bot/command')
 
-        client.subscribe('vanheusden/bitcoin/bitstamp_usd')
+    client.subscribe('vanheusden/bitcoin/bitstamp_usd')
 
 def announce_thread(client):
     while True:
@@ -301,9 +318,9 @@ def announce_thread(client):
             print(f'Failed to announce: {e}')
 
 client = mqtt.Client()
-client.connect(mqtt_server, port=1883, keepalive=4, bind_address="")
 client.on_message = on_message
 client.on_connect = on_connect
+client.connect(mqtt_server, port=1883, keepalive=4, bind_address="")
 
 t1 = threading.Thread(target=announce_thread, args=(client,))
 t1.start()

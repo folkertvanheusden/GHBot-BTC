@@ -77,17 +77,23 @@ def predict_linear(v1, t1, v2, t2, t3):
     return new_t, new_v
 
 def median(values):
-    if len(values) == 1:
-        return values[0]
+    try:
+        if len(values) == 1:
+            return (values[center][0], values[center][1])
 
-    values.sort()
+        values.sort()
 
-    center = len(values) // 2
+        center = len(values) // 2
 
-    if len(values) & 1:  # odd
-        return values[center]
+        if len(values) & 1:  # odd
+            return (values[center][0], values[center][1])
 
-    return ((values[center][0] + values[center + 1][0]) / 2, (values[center][1] + values[center + 1][1]) / 2)
+        return ((values[center][0] + values[center + 1][0]) / 2, (values[center][1] + values[center + 1][1]) / 2)
+
+    except Exception as e:
+        print(f'Exception in "median()": {e}, line number: {e.__traceback__.tb_lineno}')
+
+        return None
 
 def prophet(client, response_topic):
     con = sqlite3.connect(db_file)
@@ -190,6 +196,17 @@ def prophet(client, response_topic):
 
     con.close()
 
+def sparkline(numbers):
+    # bar = u'\u9601\u9602\u9603\u9604\u9605\u9606\u9607\u9608'
+    bar = chr(9601) + chr(9602) + chr(9603) + chr(9604) + chr(9605) + chr(9606) + chr(9607) + chr(9608)
+    barcount = len(bar)
+
+    mn, mx = min(numbers), max(numbers)
+    extent = mx - mn
+    sparkline = ''.join(bar[min([barcount - 1, int((n - mn) / extent * barcount)])] for n in numbers)
+
+    return mn, mx, sparkline
+
 def on_message(client, userdata, message):
     global prefix
 
@@ -258,9 +275,21 @@ def on_message(client, userdata, message):
                 rows = cur.fetchall()
                 yesterday_median = calc_median(rows)
 
+                out = f'timestamp: {ts}, latest BTC price: {latest_btc_price:.2f} USD, lowest: {lowest_btc_price:.2f} {compare_prices(lowest_btc_price, yesterday_lowest_btc_price, "")} USD, highest: {highest_btc_price:.2f} USD {compare_prices(highest_btc_price, yesterday_highest_btc_price, "")}, average: {avg_btc_price:.2f} USD {compare_prices(avg_btc_price, yesterday_avg_btc_price, "")}, median: {median:.2f} USD {compare_prices(median, yesterday_median, "")}'
+
+                if '-v' in text:
+                    cur.execute('SELECT AVG(btc_price) AS btc_price FROM price WHERE ts >= DateTime("now", "-24 hour") GROUP BY ROUND(STRFTIME("%s", ts)/5400) ORDER BY ts')
+                    rows = cur.fetchall()
+
+                    values = [ row[0] for row in rows ]
+
+                    mn, mx, sp = sparkline(values)
+
+                    out += ' ' + sp
+
                 cur.close()
 
-                client.publish(response_topic, f'timestamp: {ts}, latest BTC price: {latest_btc_price:.2f} USD, lowest: {lowest_btc_price:.2f} {compare_prices(lowest_btc_price, yesterday_lowest_btc_price, "")} USD, highest: {highest_btc_price:.2f} USD {compare_prices(highest_btc_price, yesterday_highest_btc_price, "")}, average: {avg_btc_price:.2f} USD {compare_prices(avg_btc_price, yesterday_avg_btc_price, "")}, median: {median:.2f} USD {compare_prices(median, yesterday_median, "")}')
+                client.publish(response_topic, out.encode('utf-8'))
 
             except Exception as e:
                 client.publish(response_topic, f'Problem retrieving BTC price ({e})')
@@ -271,9 +300,11 @@ def on_message(client, userdata, message):
 
                 cur.execute('SELECT btc_price, strftime("%s", ts) FROM price ORDER BY ts DESC LIMIT 1')
                 latest_btc_price, latest_epoch = cur.fetchone()
+                print(latest_btc_price, latest_epoch)
 
                 cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts < DateTime("now", "-24 hour") ORDER BY ts DESC LIMIT 1')
                 h24back_btc_price, h24back_epoch = cur.fetchone()
+                print(h24back_btc_price, h24back_epoch)
 
                 ts, v_avg = predict_linear(float(h24back_btc_price), int(h24back_epoch), float(latest_btc_price), int(latest_epoch), int(latest_epoch) + 86400)
 

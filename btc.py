@@ -278,7 +278,7 @@ def on_message(client, userdata, message):
                 out = f'timestamp: {ts}, latest BTC price: {latest_btc_price:.2f} USD, lowest: {lowest_btc_price:.2f} {compare_prices(lowest_btc_price, yesterday_lowest_btc_price, "")} USD, highest: {highest_btc_price:.2f} USD {compare_prices(highest_btc_price, yesterday_highest_btc_price, "")}, average: {avg_btc_price:.2f} USD {compare_prices(avg_btc_price, yesterday_avg_btc_price, "")}, median: {median:.2f} USD {compare_prices(median, yesterday_median, "")}'
 
                 if '-v' in text:
-                    cur.execute('SELECT AVG(btc_price) AS btc_price FROM price WHERE ts >= DateTime("now", "-24 hour") GROUP BY ROUND(STRFTIME("%s", ts)/5400) ORDER BY ts')
+                    cur.execute('SELECT AVG(btc_price) AS btc_price FROM price WHERE ts >= DateTime("now", "-24 hour") GROUP BY ROUND(STRFTIME("%s", ts)/3600) ORDER BY ts')
                     rows = cur.fetchall()
 
                     values = [ row[0] for row in rows ]

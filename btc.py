@@ -296,7 +296,7 @@ def on_message(client, userdata, message):
                             client.publish(response_topic, f'{btc_amount} BTC is ~ {rates[currency]["last"] * btc_amount:.2f} {currency}')
 
                         else:
-                            client.publish(response_topic, f"Currency {currency} is not known, use one of: {', '.join([c for c in j])}")
+                            client.publish(response_topic, f"Currency {currency} is not known, use one of: {', '.join([c for c in rates])}")
 
                 except Exception as e:
                     print(f'Exception while !btcprice: {e}, line number: {e.__traceback__.tb_lineno}')

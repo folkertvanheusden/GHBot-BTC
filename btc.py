@@ -4,16 +4,23 @@
 
 # either install 'python3-paho-mqtt' or 'pip3 install paho-mqtt'
 
+import json
 import paho.mqtt.client as mqtt
 import pandas as pd
 from prophet import Prophet
+import requests
 import sqlite3
+import sys
 import threading
 import time
+import traceback
 
-mqtt_server    = 'mqtt.vm.nurd.space'
-topic_prefix   = 'GHBot/'
-channels       = ['nurdbottest', 'nurds', 'nurdsbofh']
+mqtt_server    = 'localhost'
+mqtt_port      = 18830
+mqtt_btc_server = 'localhost'
+mqtt_btc_port  = 1883
+topic_prefix   = 'kiki-ng/'
+channels       = ['test', 'knageroe']
 db_file        = 'btc.db'
 prefix         = '!'
 
@@ -36,10 +43,14 @@ cur.close()
 
 con.commit()
 
+exchange_rates = None
+exchange_rates_ts = 0
+
 def announce_commands(client):
     target_topic = f'{topic_prefix}to/bot/register'
 
     client.publish(target_topic, 'cmd=btc|descr=Show bitcoin statistics: current timestamp, latest price (compared to previous price), lowest price (compared to > 24h back), highest price (compared to > 24h back)')
+    client.publish(target_topic, 'cmd=btcprice|descr=Show the price in a currency of a certain BTC amnount. Parameters: amount and currency.')
     client.publish(target_topic, 'cmd=btcplin|descr=Linear predictions for bitcoin price')
     client.publish(target_topic, 'cmd=btcfb|descr=Predict bitcoin price using facebook-prophet')
 
@@ -207,27 +218,43 @@ def sparkline(numbers):
 
     return mn, mx, sparkline
 
+def on_message_btc(client, userdata, message):
+    text = message.payload.decode('utf-8')
+
+    if message.topic == 'vanheusden/bitcoin/bitstamp_usd':
+        try:
+            print(text)
+            btc_price = float(text)
+
+            cur = userdata.cursor()
+            cur.execute("INSERT INTO price(ts, btc_price) VALUES(DateTime('now'), ?)", (btc_price,))
+            cur.close()
+
+            userdata.commit()
+
+        except Exception as e:
+            print(f'BTC announcement failed: {e}')
+
+def fetch_exchange_rates():
+    global exchange_rates
+    global exchange_rates_ts
+
+    now = time.time()
+
+    if now - exchange_rates_ts > 15 * 60 or exchange_rates == None:
+        r = requests.get(f'https://blockchain.info/ticker')
+        exchange_rates = json.loads(r.content.decode('utf8'))
+
+        exchange_rates_ts = now
+
+    return exchange_rates
+
 def on_message(client, userdata, message):
     global prefix
 
     text = message.payload.decode('utf-8')
 
     topic = message.topic[len(topic_prefix):]
-
-    if message.topic == 'vanheusden/bitcoin/bitstamp_usd':
-        try:
-            btc_price = float(text)
-
-            cur = con.cursor()
-            cur.execute("INSERT INTO price(ts, btc_price) VALUES(DateTime('now'), ?)", (btc_price,))
-            cur.close()
-
-            con.commit()
-
-        except Exception as e:
-            print(f'BTC announcement failed: {e}')
-
-        return
 
     if topic == 'from/bot/command' and text == 'register':
         announce_commands(client)
@@ -240,7 +267,7 @@ def on_message(client, userdata, message):
         return
 
     parts   = topic.split('/')
-    channel = parts[2] if len(parts) >= 3 else 'nurds'
+    channel = parts[2] if len(parts) >= 3 else 'knageroe'
     nick    = parts[3] if len(parts) >= 4 else 'jemoeder'
 
     #print(channel)
@@ -254,7 +281,28 @@ def on_message(client, userdata, message):
 
         command = tokens[0][1:]
 
-        if command == 'btc':
+        if command == 'btcprice':
+            if len(tokens) != 3:
+                client.publish(response_topic, f'Required parameters: btc-amount currency')
+            else:
+                try:
+                    rates = fetch_exchange_rates()
+
+                    if rates:
+                        btc_amount = float(tokens[1])
+                        currency = tokens[2].upper()
+
+                        if currency in rates:
+                            client.publish(response_topic, f'{btc_amount} BTC is ~ {rates[currency]["last"] * btc_amount:.2f} {currency}')
+
+                        else:
+                            client.publish(response_topic, f"Currency {currency} is not known, use one of: {', '.join([c for c in j])}")
+
+                except Exception as e:
+                    print(f'Exception while !btcprice: {e}, line number: {e.__traceback__.tb_lineno}')
+                    client.publish(response_topic, f'Failed updating exchange rates: {e}')
+
+        elif command == 'btc':
             try:
                 cur = con.cursor()
 
@@ -293,6 +341,7 @@ def on_message(client, userdata, message):
 
             except Exception as e:
                 client.publish(response_topic, f'Problem retrieving BTC price ({e})')
+                traceback.print_exc(file=sys.stderr)
 
         elif command == 'btcplin':
             try:
@@ -336,6 +385,7 @@ def on_connect(client, userdata, flags, rc):
 
     client.subscribe(f'{topic_prefix}from/bot/command')
 
+def on_connect_btc(client, userdata, flags, rc):
     client.subscribe('vanheusden/bitcoin/bitstamp_usd')
 
 def announce_thread(client):
@@ -348,12 +398,25 @@ def announce_thread(client):
         except Exception as e:
             print(f'Failed to announce: {e}')
 
+def btc_thread():
+    con = sqlite3.connect(db_file)
+
+    btc_client = mqtt.Client(userdata=con)
+    btc_client.on_message = on_message_btc
+    btc_client.on_connect = on_connect_btc
+    btc_client.connect(mqtt_btc_server, port=mqtt_btc_port, keepalive=4, bind_address="")
+
+    btc_client.loop_forever()
+
 client = mqtt.Client()
 client.on_message = on_message
 client.on_connect = on_connect
-client.connect(mqtt_server, port=1883, keepalive=4, bind_address="")
+client.connect(mqtt_server, port=mqtt_port, keepalive=4, bind_address="")
 
 t1 = threading.Thread(target=announce_thread, args=(client,))
 t1.start()
+
+t2 = threading.Thread(target=btc_thread)
+t2.start()
 
 client.loop_forever()

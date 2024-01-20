@@ -106,7 +106,18 @@ def median(values):
 
         return None
 
-def prophet(client, response_topic):
+def sparkline(numbers):
+    # bar = u'\u9601\u9602\u9603\u9604\u9605\u9606\u9607\u9608'
+    bar = chr(9601) + chr(9602) + chr(9603) + chr(9604) + chr(9605) + chr(9606) + chr(9607) + chr(9608)
+    barcount = len(bar)
+
+    mn, mx = min(numbers), max(numbers)
+    extent = mx - mn
+    sparkline = ''.join(bar[min([barcount - 1, int((n - mn) / extent * barcount)])] for n in numbers)
+
+    return mn, mx, sparkline
+
+def prophet(client, response_topic, verbose):
     con = sqlite3.connect(db_file)
 
     try:
@@ -176,13 +187,15 @@ def prophet(client, response_topic):
         m = Prophet()
         m.fit(df_a)
 
-        future = m.make_future_dataframe(periods=1)
+        n_periods = 21
+
+        future = m.make_future_dataframe(periods=n_periods)
         future.tail()
 
         forecast = m.predict(future)
 
-        prediction_ts_a = list(forecast.tail(1)['ds'])[0]
-        prediction_va   = list(forecast.tail(1)['trend'])[0]
+        prediction_ts_a = list(forecast.tail(n_periods).head(1)['ds'])[0]
+        prediction_va   = list(forecast.tail(n_periods).head(1)['trend'])[0]
 
         # median
         ds_m = pd.to_datetime(tsm, unit='s')
@@ -192,31 +205,28 @@ def prophet(client, response_topic):
         m = Prophet()
         m.fit(df_m)
 
-        future = m.make_future_dataframe(periods=1)
+        future = m.make_future_dataframe(periods=n_periods)
         future.tail()
 
         forecast = m.predict(future)
 
-        prediction_ts_m = list(forecast.tail(1)['ds'])[0]
-        prediction_ma   = list(forecast.tail(1)['trend'])[0]
+        prediction_ts_m = list(forecast.tail(n_periods).head(1)['ds'])[0]
+        prediction_ma   = list(forecast.tail(n_periods).head(1)['trend'])[0]
 
-        client.publish(response_topic, f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m})')
+        out = f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m})'
+
+        if verbose:
+            numbers = []
+            for i in range(n_periods):
+                numbers.append(list(forecast.tail(n_periods - i).head(1)['trend'])[0])
+            out += ', sparkline of avg: ' + sparkline(numbers)[2]
+
+        client.publish(response_topic, out)
 
     except Exception as e:
         client.publish(response_topic, f'Exception while predicting BTC price (facebook prophet): {e}, line number: {e.__traceback__.tb_lineno}')
 
     con.close()
-
-def sparkline(numbers):
-    # bar = u'\u9601\u9602\u9603\u9604\u9605\u9606\u9607\u9608'
-    bar = chr(9601) + chr(9602) + chr(9603) + chr(9604) + chr(9605) + chr(9606) + chr(9607) + chr(9608)
-    barcount = len(bar)
-
-    mn, mx = min(numbers), max(numbers)
-    extent = mx - mn
-    sparkline = ''.join(bar[min([barcount - 1, int((n - mn) / extent * barcount)])] for n in numbers)
-
-    return mn, mx, sparkline
 
 def on_message_btc(client, userdata, message):
     text = message.payload.decode('utf-8')
@@ -377,7 +387,7 @@ def on_message(client, userdata, message):
                 client.publish(response_topic, f'Exception while predicting BTC price (linear): {e}, line number: {e.__traceback__.tb_lineno}')
 
         elif command == 'btcfb':
-            t = threading.Thread(target=prophet, args=(client, response_topic), daemon=True)
+            t = threading.Thread(target=prophet, args=(client, response_topic, '-v' in text), daemon=True)
             t.start()
 
 def on_connect(client, userdata, flags, rc):

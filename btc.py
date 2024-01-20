@@ -49,10 +49,10 @@ exchange_rates_ts = 0
 def announce_commands(client):
     target_topic = f'{topic_prefix}to/bot/register'
 
-    client.publish(target_topic, 'cmd=btc|descr=Show bitcoin statistics: current timestamp, latest price (compared to previous price), lowest price (compared to > 24h back), highest price (compared to > 24h back)')
-    client.publish(target_topic, 'cmd=btcprice|descr=Show the price in a currency of a certain BTC amnount. Parameters: amount and currency.')
-    client.publish(target_topic, 'cmd=btcplin|descr=Linear predictions for bitcoin price')
-    client.publish(target_topic, 'cmd=btcfb|descr=Predict bitcoin price using facebook-prophet')
+    client.publish(target_topic, 'hgrp=btc|cmd=btc|descr=Show bitcoin statistics: current timestamp, latest price (compared to previous price), lowest price (compared to > 24h back), highest price (compared to > 24h back)')
+    client.publish(target_topic, 'hgrp=btc|cmd=btcprice|descr=Show the price in a currency of a certain BTC amnount. Parameters: amount and currency.')
+    client.publish(target_topic, 'hgrp=btc|cmd=btcplin|descr=Linear predictions for bitcoin price')
+    client.publish(target_topic, 'hgrp=btc|cmd=btcfb|descr=Predict bitcoin price using facebook-prophet')
 
 def calc_median(rows):
     rows = sorted(rows)

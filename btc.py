@@ -219,7 +219,7 @@ def prophet(client, response_topic, verbose):
             numbers = []
             for i in range(n_periods):
                 numbers.append(list(forecast.tail(n_periods - i).head(1)['trend'])[0])
-            out += ', sparkline of avg: ' + sparkline(numbers)[2]
+            out += f', sparkline of avg ({n_periods} days): ' + sparkline(numbers)[2]
 
         client.publish(response_topic, out)
 

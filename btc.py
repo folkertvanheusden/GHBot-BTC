@@ -113,7 +113,10 @@ def sparkline(numbers):
 
     mn, mx = min(numbers), max(numbers)
     extent = mx - mn
-    sparkline = ''.join(bar[min([barcount - 1, int((n - mn) / extent * barcount)])] for n in numbers)
+    if extent != 0:
+        sparkline = ''.join(bar[min([barcount - 1, int((n - mn) / extent * barcount)])] for n in numbers)
+    else:
+        sparkline = '- n.a. (yet) -'
 
     return mn, mx, sparkline
 
@@ -352,7 +355,7 @@ def on_message(client, userdata, message):
                 client.publish(response_topic, out.encode('utf-8'))
 
             except Exception as e:
-                client.publish(response_topic, f'Problem retrieving BTC price ({e})')
+                client.publish(response_topic, f'Problem retrieving BTC price ({e} - line number: {e.__traceback__.tb_lineno})')
                 traceback.print_exc(file=sys.stderr)
 
         elif command == 'btcplin':

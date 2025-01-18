@@ -15,26 +15,23 @@ import threading
 import time
 import traceback
 
-mqtt_server    = 'localhost'
-mqtt_port      = 18830
-mqtt_btc_server = 'localhost'
+mqtt_server    = 'mqtt.vm.nurd.space'
+mqtt_port      = 1883
+mqtt_btc_server = 'vps001.vanheusden.com'
 mqtt_btc_port  = 1883
-topic_prefix   = 'kiki-ng/'
-channels       = ['test', 'knageroe']
+topic_prefix   = 'GHBot/'
+channels       = ['nurdbottest', 'nurds', 'nurdsbofh']
 db_file        = 'btc.db'
 prefix         = '!'
 
 con = sqlite3.connect(db_file)
-
 cur = con.cursor()
-
 try:
     cur.execute('CREATE TABLE price(ts datetime not null primary key, btc_price double not null)')
 
 except sqlite3.OperationalError as oe:
     # should be "table already exists"
     pass
-
 cur.close()
 
 cur = con.cursor()
@@ -155,9 +152,9 @@ def prophet(client, response_topic, verbose):
                     va .append(avg_tot_v / n_tot)
 
                     med = median(med_tot)
-
-                    tsm.append(med[0])
-                    vm .append(med[1])
+                    if med != None:
+                        tsm.append(med[0])
+                        vm .append(med[1])
 
                 groupby = groupby_cur
 
@@ -178,9 +175,9 @@ def prophet(client, response_topic, verbose):
             va .append(avg_tot_v / n_tot)
 
             med = median(med_tot)
-
-            tsm.append(med[0])
-            vm .append(med[1])
+            if med != None:
+                tsm.append(med[0])
+                vm .append(med[1])
 
         # average
         ds_a = pd.to_datetime(tsa, unit='s')
@@ -198,7 +195,7 @@ def prophet(client, response_topic, verbose):
         forecast = m.predict(future)
 
         prediction_ts_a = list(forecast.tail(n_periods).head(1)['ds'])[0]
-        prediction_va   = list(forecast.tail(n_periods).head(1)['trend'])[0]
+        prediction_va   = list(forecast.tail(n_periods).head(1)['yhat'])[0]
 
         # median
         ds_m = pd.to_datetime(tsm, unit='s')
@@ -214,16 +211,16 @@ def prophet(client, response_topic, verbose):
         forecast = m.predict(future)
 
         prediction_ts_m = list(forecast.tail(n_periods).head(1)['ds'])[0]
-        prediction_ma   = list(forecast.tail(n_periods).head(1)['trend'])[0]
+        prediction_ma   = list(forecast.tail(n_periods).head(1)['yhat'])[0]
 
         out = f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m})'
 
         if verbose:
             numbers = []
             for i in range(n_periods):
-                numbers.append(list(forecast.tail(n_periods - i).head(1)['trend'])[0])
+                numbers.append(list(forecast.tail(n_periods - i).head(1)['yhat'])[0])
             prediction_ts_a = list(forecast.tail(1).head(1)['ds'])[0]
-            prediction_va   = list(forecast.tail(1).head(1)['trend'])[0]
+            prediction_va   = list(forecast.tail(1).head(1)['yhat'])[0]
             out += f', sparkline of avg ({n_periods} days): ' + sparkline(numbers)[2] + f', ends with {prediction_va:.2f} dollar (on {prediction_ts_a})'
 
         client.publish(response_topic, out)
@@ -238,7 +235,7 @@ def on_message_btc(client, userdata, message):
 
     if message.topic == 'vanheusden/bitcoin/bitstamp_usd':
         try:
-            print(text)
+            # print(text)
             btc_price = float(text)
 
             cur = userdata.cursor()
@@ -364,11 +361,11 @@ def on_message(client, userdata, message):
 
                 cur.execute('SELECT btc_price, strftime("%s", ts) FROM price ORDER BY ts DESC LIMIT 1')
                 latest_btc_price, latest_epoch = cur.fetchone()
-                print(latest_btc_price, latest_epoch)
+                #print(latest_btc_price, latest_epoch)
 
                 cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts < DateTime("now", "-24 hour") ORDER BY ts DESC LIMIT 1')
                 h24back_btc_price, h24back_epoch = cur.fetchone()
-                print(h24back_btc_price, h24back_epoch)
+                #print(h24back_btc_price, h24back_epoch)
 
                 ts, v_avg = predict_linear(float(h24back_btc_price), int(h24back_epoch), float(latest_btc_price), int(latest_epoch), int(latest_epoch) + 86400)
 
@@ -396,12 +393,17 @@ def on_message(client, userdata, message):
             t.start()
 
 def on_connect(client, userdata, flags, rc):
-    client.subscribe(f'{topic_prefix}from/irc/#')
-
-    client.subscribe(f'{topic_prefix}from/bot/command')
+    try:
+        client.subscribe(f'{topic_prefix}from/irc/#')
+        client.subscribe(f'{topic_prefix}from/bot/command')
+    except Exception as e:
+        print(e)
 
 def on_connect_btc(client, userdata, flags, rc):
-    client.subscribe('vanheusden/bitcoin/bitstamp_usd')
+    try:
+        client.subscribe('vanheusden/bitcoin/bitstamp_usd')
+    except Exception as e:
+        print(e)
 
 def announce_thread(client):
     while True:

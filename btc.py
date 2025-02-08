@@ -86,12 +86,12 @@ def predict_linear(v1, t1, v2, t2, t3):
 
 def median(values):
     try:
+        center = len(values) // 2
+
         if len(values) == 1:
             return (values[center][0], values[center][1])
 
         values.sort()
-
-        center = len(values) // 2
 
         if len(values) & 1:  # odd
             return (values[center][0], values[center][1])
@@ -126,13 +126,13 @@ def prophet(client, response_topic, verbose):
         cur = con.cursor()
         # cur.execute('SELECT strftime("%s", ts) as ts, btc_price FROM (select ts, avg(btc_price) as btc_price from price group by round(strftime("%s", ts) / 300) order by ts desc LIMIT 1000) AS in_ ORDER BY ts')
         cur.execute('SELECT strftime("%s", ts) as ts, btc_price FROM (select ts, btc_price from price order by ts desc LIMIT 20000) AS in_ ORDER BY ts')
-        rows = cur.fetchall()
-        cur.close()
 
         tsa = []
         tsm = []
+        tsAI= []
         va  = []
         vm  = []
+        vAI = []
 
         groupby = None
         avg_tot_t = None
@@ -140,11 +140,14 @@ def prophet(client, response_topic, verbose):
         med_tot = None
         n_tot   = 0
 
-        for row in rows:
+        for row in cur:
             ts = int(row[0])
             v  = float(row[1])
 
             groupby_cur = int(ts / 300)
+
+            tsAI.append(ts)
+            vAI.append(v)
 
             if groupby_cur != groupby:
                 if n_tot > 0:
@@ -179,9 +182,10 @@ def prophet(client, response_topic, verbose):
                 tsm.append(med[0])
                 vm .append(med[1])
 
+        cur.close()
+
         # average
         ds_a = pd.to_datetime(tsa, unit='s')
-
         df_a = pd.DataFrame({'ds': ds_a, 'y': va}, columns=['ds', 'y'])
 
         m = Prophet()
@@ -199,7 +203,6 @@ def prophet(client, response_topic, verbose):
 
         # median
         ds_m = pd.to_datetime(tsm, unit='s')
-
         df_m = pd.DataFrame({'ds': ds_m, 'y': vm}, columns=['ds', 'y'])
 
         m = Prophet()
@@ -213,7 +216,24 @@ def prophet(client, response_topic, verbose):
         prediction_ts_m = list(forecast.tail(n_periods).head(1)['ds'])[0]
         prediction_ma   = list(forecast.tail(n_periods).head(1)['yhat'])[0]
 
-        out = f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m})'
+        # as-is
+        ds_m = pd.to_datetime(tsAI, unit='s')
+        df_m = pd.DataFrame({'ds': ds_m, 'y': vAI}, columns=['ds', 'y'])
+
+        m = Prophet()
+        m.fit(df_m)
+
+        future = m.make_future_dataframe(periods=n_periods)
+        future.tail()
+
+        forecast = m.predict(future)
+
+        prediction_ts_AI = list(forecast.tail(n_periods).head(1)['ds'])[0]
+        prediction_AIa   = list(forecast.tail(n_periods).head(1)['yhat'])[0]
+
+        ###
+
+        out = f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m}) or maybe {prediction_AIa:.2f} dollar ({prediction_ts_AI})'
 
         if verbose:
             numbers = []

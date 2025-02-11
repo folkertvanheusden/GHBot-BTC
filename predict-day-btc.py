@@ -8,9 +8,10 @@ import matplotlib.pyplot as plt
 import math
 import numpy as np
 import scipy.stats
+import socket
 import sqlite3
 
-
+influx_server  = ('influx.vm.nurd.space', 2010)
 db_file = 'btc.db'
 steps = 30  # group by this number of seconds
 
@@ -110,3 +111,10 @@ plt.gca().xaxis.set(major_formatter=fmt)
 plt.grid()
 plt.plot(x,y)
 plt.savefig('btc-prediction.svg')
+
+if influx_server != None:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(influx_server)
+    for ts in result:
+        s.send(f'similar_btc {result[ts]} {int(ts.timestamp())}\n'.encode('ascii'))
+    s.close()

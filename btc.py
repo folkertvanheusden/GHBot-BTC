@@ -9,6 +9,7 @@ import paho.mqtt.client as mqtt
 import pandas as pd
 from prophet import Prophet
 import requests
+import socket
 import sqlite3
 import sys
 import threading
@@ -23,6 +24,7 @@ topic_prefix   = 'GHBot/'
 channels       = ['nurdbottest', 'nurds', 'nurdsbofh']
 db_file        = 'btc.db'
 prefix         = '!'
+influx_server  = ('influx.vm.nurd.space', 2010)   # replace by influx_server=None to disable
 
 con = sqlite3.connect(db_file)
 cur = con.cursor()
@@ -117,22 +119,17 @@ def sparkline(numbers):
 
     return mn, mx, sparkline
 
-def prophet(client, response_topic, verbose):
+def prophet_low():
     con = sqlite3.connect(db_file)
 
     try:
-        client.publish(response_topic, 'Predicting takes a while, please wait.')
-
         cur = con.cursor()
-        # cur.execute('SELECT strftime("%s", ts) as ts, btc_price FROM (select ts, avg(btc_price) as btc_price from price group by round(strftime("%s", ts) / 300) order by ts desc LIMIT 1000) AS in_ ORDER BY ts')
         cur.execute('SELECT strftime("%s", ts) as ts, btc_price FROM (select ts, btc_price from price order by ts desc LIMIT 20000) AS in_ ORDER BY ts')
 
         tsa = []
         tsm = []
-        tsAI= []
         va  = []
         vm  = []
-        vAI = []
 
         groupby = None
         avg_tot_t = None
@@ -145,9 +142,6 @@ def prophet(client, response_topic, verbose):
             v  = float(row[1])
 
             groupby_cur = int(ts / 300)
-
-            tsAI.append(ts)
-            vAI.append(v)
 
             if groupby_cur != groupby:
                 if n_tot > 0:
@@ -216,39 +210,88 @@ def prophet(client, response_topic, verbose):
         prediction_ts_m = list(forecast.tail(n_periods).head(1)['ds'])[0]
         prediction_ma   = list(forecast.tail(n_periods).head(1)['yhat'])[0]
 
-        # as-is
-        ds_m = pd.to_datetime(tsAI, unit='s')
-        df_m = pd.DataFrame({'ds': ds_m, 'y': vAI}, columns=['ds', 'y'])
+    except Exception as e:
+        print(f'Exception while predicting BTC price (facebook prophet): {e}, line number: {e.__traceback__.tb_lineno}')
+        return None, None, None, None
 
-        m = Prophet()
-        m.fit(df_m)
+    con.close()
 
-        future = m.make_future_dataframe(periods=n_periods)
-        future.tail()
+    return prediction_va, prediction_ts_a, prediction_ma, prediction_ts_m
 
-        forecast = m.predict(future)
+def prophet(client, response_topic, verbose):
+    try:
+        client.publish(response_topic, 'Predicting takes a while, please wait.')
 
-        prediction_ts_AI = list(forecast.tail(n_periods).head(1)['ds'])[0]
-        prediction_AIa   = list(forecast.tail(n_periods).head(1)['yhat'])[0]
+        prediction_va, prediction_ts_a, prediction_ma, prediction_ts_m = prophet_low()
 
-        ###
-
-        out = f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m}) or maybe {prediction_AIa:.2f} dollar ({prediction_ts_AI})'
-
-        if verbose:
-            numbers = []
-            for i in range(n_periods):
-                numbers.append(list(forecast.tail(n_periods - i).head(1)['yhat'])[0])
-            prediction_ts_a = list(forecast.tail(1).head(1)['ds'])[0]
-            prediction_va   = list(forecast.tail(1).head(1)['yhat'])[0]
-            out += f', sparkline of avg ({n_periods} days): ' + sparkline(numbers)[2] + f', ends with {prediction_va:.2f} dollar (on {prediction_ts_a})'
-
+        out = f'BTC price prediction: (probably not correct): {prediction_va:.2f} dollar (based on 5min average, {prediction_ts_a}) or {prediction_ma:.2f} dollar (based on 5min median, {prediction_ts_m})'
         client.publish(response_topic, out)
 
     except Exception as e:
         client.publish(response_topic, f'Exception while predicting BTC price (facebook prophet): {e}, line number: {e.__traceback__.tb_lineno}')
 
-    con.close()
+def btcplin():
+    con = sqlite3.connect(db_file)
+
+    try:
+        cur = con.cursor()
+
+        cur.execute('SELECT btc_price, strftime("%s", ts) FROM price ORDER BY ts DESC LIMIT 1')
+        latest_btc_price, latest_epoch = cur.fetchone()
+        #print(latest_btc_price, latest_epoch)
+
+        cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts < DateTime("now", "-24 hour") ORDER BY ts DESC LIMIT 1')
+        h24back_btc_price, h24back_epoch = cur.fetchone()
+        #print(h24back_btc_price, h24back_epoch)
+
+        ts, v_avg = predict_linear(float(h24back_btc_price), int(h24back_epoch), float(latest_btc_price), int(latest_epoch), int(time.time()) + 86400)
+
+        cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts >= DateTime("now", "-24 hour") ORDER BY ts ASC')
+        rows = cur.fetchall()
+        median = calc_median(rows)
+        ts_median = rows[0][1]
+
+        cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts >= DateTime("now", "-48 hour") and ts < DateTime("now", "-24 hour") ORDER BY ts ASC')
+        rows = cur.fetchall()
+        yesterday_median = calc_median(rows)
+        ts_yesterday_median = rows[0][1]
+
+        ts, v_median = predict_linear(float(yesterday_median), int(ts_yesterday_median), float(median), int(ts_median), int(time.time()) + 86400)
+
+        cur.close()
+
+        con.close()
+
+        return ts, v_avg, v_median
+
+    except Exception as e:
+        print(f'Exception while predicting BTC price: {e}, line number: {e.__traceback__.tb_lineno}')
+        con.close()
+        return None, None, None
+
+def collect_predictions():
+    if influx_server != None:
+        while True:
+            try:
+                prediction_va, prediction_ts_a, prediction_ma, prediction_ts_m = prophet_low()
+
+                ts, v_avg, v_median = btcplin()
+
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect(influx_server)
+                if prediction_va:
+                    s.send(f'btc_usd_prophet_avg {prediction_va} {int(prediction_ts_a.to_pydatetime().timestamp())}\n'.encode('ascii'))
+                if prediction_ma:
+                    s.send(f'btc_usd_prophet_median {prediction_ma} {int(prediction_ts_m.to_pydatetime().timestamp())}\n'.encode('ascii'))
+                if v_avg:
+                    s.send(f'btc_usd_plin_avg {v_avg} {int(ts)}\n'.encode('ascii'))
+                if v_median:
+                    s.send(f'btc_usd_plin_median {v_median} {int(ts)}\n'.encode('ascii'))
+                s.close()
+            except Exception as e:
+                print(f'Exception while predicting BTC price (facebook prophet): {e}, line number: {e.__traceback__.tb_lineno}')
+
+            time.sleep(60)
 
 def on_message_btc(client, userdata, message):
     text = message.payload.decode('utf-8')
@@ -263,6 +306,12 @@ def on_message_btc(client, userdata, message):
             cur.close()
 
             userdata.commit()
+
+            if influx_server != None:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect(influx_server)
+                s.send(f'btc_usd {btc_price} {int(time.time())}\n'.encode('ascii'))
+                s.close()
 
         except Exception as e:
             print(f'BTC announcement failed: {e}')
@@ -377,31 +426,7 @@ def on_message(client, userdata, message):
 
         elif command == 'btcplin':
             try:
-                cur = con.cursor()
-
-                cur.execute('SELECT btc_price, strftime("%s", ts) FROM price ORDER BY ts DESC LIMIT 1')
-                latest_btc_price, latest_epoch = cur.fetchone()
-                #print(latest_btc_price, latest_epoch)
-
-                cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts < DateTime("now", "-24 hour") ORDER BY ts DESC LIMIT 1')
-                h24back_btc_price, h24back_epoch = cur.fetchone()
-                #print(h24back_btc_price, h24back_epoch)
-
-                ts, v_avg = predict_linear(float(h24back_btc_price), int(h24back_epoch), float(latest_btc_price), int(latest_epoch), int(latest_epoch) + 86400)
-
-                cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts >= DateTime("now", "-24 hour") ORDER BY ts ASC')
-                rows = cur.fetchall()
-                median = calc_median(rows)
-                ts_median = rows[0][1]
-
-                cur.execute('SELECT btc_price, strftime("%s", ts) FROM price WHERE ts >= DateTime("now", "-48 hour") and ts < DateTime("now", "-24 hour") ORDER BY ts ASC')
-                rows = cur.fetchall()
-                yesterday_median = calc_median(rows)
-                ts_yesterday_median = rows[0][1]
-
-                ts, v_median = predict_linear(float(yesterday_median), int(ts_yesterday_median), float(median), int(ts_median), int(ts_median) + 86400)
-
-                cur.close()
+                ts, v_avg, v_median = btcplin()
 
                 client.publish(response_topic, f'In 24 hours the bitcoin price may be around {v_avg:.2f} USD (based on average), or {v_median:.2f} USD (based on median)')
 
@@ -455,5 +480,8 @@ t1.start()
 
 t2 = threading.Thread(target=btc_thread)
 t2.start()
+
+t3 = threading.Thread(target=collect_predictions)
+t3.start()
 
 client.loop_forever()

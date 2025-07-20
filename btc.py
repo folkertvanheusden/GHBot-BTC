@@ -43,6 +43,7 @@ def announce_commands(client):
     client.publish(target_topic, 'hgrp=btc|cmd=btcprice|descr=Show the price in a currency of a certain BTC amnount. Parameters: amount and currency.')
     client.publish(target_topic, 'hgrp=btc|cmd=btcplin|descr=Linear predictions for bitcoin price')
     client.publish(target_topic, 'hgrp=btc|cmd=btcfb|descr=Predict bitcoin price using facebook-prophet')
+    client.publish(target_topic, 'hgrp=btc|cmd=btctop|descr=Show all time high')
 
 def calc_median(rows):
     rows = sorted(rows)
@@ -373,6 +374,21 @@ def on_message(client, userdata, message):
                 except Exception as e:
                     print(f'Exception while !btcprice: {e}, line number: {e.__traceback__.tb_lineno}')
                     client.publish(response_topic, f'Failed updating exchange rates: {e}')
+
+        elif command == 'btctop':
+            try:
+                cur = con.cursor()
+                cur.execute('SELECT datetime(ts, "localtime"), btc_price, strftime("%s", ts) FROM price ORDER BY btc_price DESC LIMIT 1')
+                row = cur.fetchone()
+                cur.close()
+
+                out = f'Bitcoin all time high was {row[1]} at {row[0]}'
+
+                client.publish(response_topic, out.encode('utf-8'))
+
+            except Exception as e:
+                client.publish(response_topic, f'Problem retrieving BTC price ({e} - line number: {e.__traceback__.tb_lineno})')
+                traceback.print_exc(file=sys.stderr)
 
         elif command == 'btc':
             try:

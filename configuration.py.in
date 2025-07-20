@@ -1,0 +1,9 @@
+mqtt_server    = 'localhost'
+mqtt_port      = 18830
+mqtt_btc_server = 'localhost'
+mqtt_btc_port  = 1883
+topic_prefix   = 'kiki-ng/'
+channels       = ['test', 'knageroe']
+db_file        = 'btc.db'
+prefix         = '!'
+influx_server  = ('localhost', 2003)   # replace by influx_server=None to disable

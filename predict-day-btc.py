@@ -2,6 +2,7 @@
 
 # by FvH, released under MIT License
 
+from configuration import *
 import datetime
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -11,7 +12,6 @@ import scipy.stats
 import socket
 import sqlite3
 
-influx_server  = ('influx.vm.nurd.space', 2010)
 db_file = 'btc.db'
 steps = 30  # group by this number of seconds
 

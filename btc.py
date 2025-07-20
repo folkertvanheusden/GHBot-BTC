@@ -4,10 +4,11 @@
 
 # either install 'python3-paho-mqtt' or 'pip3 install paho-mqtt'
 
+from configuration import *
+from prophet import Prophet
 import json
 import paho.mqtt.client as mqtt
 import pandas as pd
-from prophet import Prophet
 import requests
 import socket
 import sqlite3
@@ -15,16 +16,6 @@ import sys
 import threading
 import time
 import traceback
-
-mqtt_server    = 'mqtt.vm.nurd.space'
-mqtt_port      = 1883
-mqtt_btc_server = 'vps001.vanheusden.com'
-mqtt_btc_port  = 1883
-topic_prefix   = 'GHBot/'
-channels       = ['nurdbottest', 'nurds', 'nurdsbofh']
-db_file        = 'btc.db'
-prefix         = '!'
-influx_server  = ('influx.vm.nurd.space', 2010)   # replace by influx_server=None to disable
 
 con = sqlite3.connect(db_file)
 cur = con.cursor()
